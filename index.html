@@ -1,0 +1,558 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <meta name="theme-color" content="#070710" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="Driver Tracker" />
+  <title>Driver Daily Tracker</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@400;600;700;900&display=swap" rel="stylesheet" />
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body, #root { height: 100%; background: #070710; }
+    body { overscroll-behavior: none; font-family: 'Rajdhani', sans-serif; }
+    input[type=number]::-webkit-outer-spin-button,
+    input[type=number]::-webkit-inner-spin-button { -webkit-appearance: none; }
+    input[type=number] { -moz-appearance: textfield; }
+    textarea { font-family: 'Rajdhani', sans-serif; }
+    ::-webkit-scrollbar { width: 3px; }
+    ::-webkit-scrollbar-thumb { background: #2a2a45; border-radius: 2px; }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/recharts/2.12.7/Recharts.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.4/babel.min.js"></script>
+
+  <script type="text/babel">
+    const { useState, useEffect } = React;
+    const { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell } = Recharts;
+
+    const STORAGE_KEY  = "ddt_data_v1";
+    const TARGET_KEY   = "ddt_target_v1";
+    const SAVINGS_KEY  = "ddt_savings_v1";
+    const FLOAT_KEY    = "ddt_float_v1";
+    const DEFAULT_FLOAT = 50;
+
+    const todayStr = () => new Date().toISOString().split("T")[0];
+    const fmtDate  = (d) => new Date(d + "T12:00:00").toLocaleDateString("en-ZM", { weekday: "short", day: "numeric", month: "short" });
+
+    const load    = (k, def) => { try { const v = localStorage.getItem(k); return v ? JSON.parse(v) : def; } catch { return def; } };
+    const persist = (k, v)   => { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} };
+
+    const C = {
+      bg: "#070710", card: "#0f0f1c", card2: "#141426", border: "#1c1c32",
+      accent: "#f59e0b", accentLo: "#92400e", green: "#10b981", red: "#f43f5e",
+      blue: "#38bdf8", purple: "#a78bfa", text: "#e2e2f0", sub: "#9191a8", dim: "#3f3f5a", input: "#111122",
+    };
+
+    const emptyBlock = () => ({ trips: "", cashIn: "", notes: "" });
+    const emptyDay   = (fl) => ({
+      trips: "", cashIn: "", fuel: "", float: String(fl),
+      blocks: { morning: emptyBlock(), midday: emptyBlock(), evening: emptyBlock(), night: emptyBlock() },
+    });
+
+    /* ── primitives ───────────────────────────────────── */
+    function Lbl({ children }) {
+      return <div style={{ color: C.sub, fontSize: 10, letterSpacing: 1.2, textTransform: "uppercase", marginBottom: 4 }}>{children}</div>;
+    }
+
+    function NumInput({ label, value, onChange, prefix, placeholder = "0" }) {
+      return (
+        <div style={{ marginBottom: 12 }}>
+          {label && <Lbl>{label}</Lbl>}
+          <div style={{ display: "flex", alignItems: "center", background: C.input, border: `1px solid ${C.border}`, borderRadius: 12, overflow: "hidden" }}>
+            {prefix && <span style={{ padding: "0 10px", color: C.accent, fontWeight: 800, fontSize: 15 }}>{prefix}</span>}
+            <input
+              type="number" inputMode="decimal" value={value} placeholder={placeholder}
+              onChange={e => onChange(e.target.value)}
+              style={{ flex: 1, background: "transparent", border: "none", outline: "none", color: C.text, padding: "13px 12px 13px 0", fontSize: 18, fontWeight: 600 }}
+            />
+          </div>
+        </div>
+      );
+    }
+
+    function TxtInput({ label, value, onChange, placeholder }) {
+      return (
+        <div style={{ marginBottom: 12 }}>
+          {label && <Lbl>{label}</Lbl>}
+          <textarea value={value} placeholder={placeholder} onChange={e => onChange(e.target.value)}
+            style={{ width: "100%", background: C.input, border: `1px solid ${C.border}`, borderRadius: 12, padding: "10px 12px", color: C.text, fontSize: 13, resize: "none", height: 56, outline: "none" }}
+          />
+        </div>
+      );
+    }
+
+    function Card({ children, accent, style }) {
+      return (
+        <div style={{ background: C.card, border: `1px solid ${accent ? accent + "55" : C.border}`, borderRadius: 18, padding: 16, marginBottom: 12, ...style }}>
+          {children}
+        </div>
+      );
+    }
+
+    function Row({ label, value, color, big, noBorder }) {
+      return (
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 0", borderBottom: noBorder ? "none" : `1px solid ${C.border}` }}>
+          <span style={{ color: C.sub, fontSize: big ? 14 : 12 }}>{label}</span>
+          <span style={{ color: color || C.text, fontSize: big ? 22 : 16, fontWeight: 800 }}>{value}</span>
+        </div>
+      );
+    }
+
+    function SecHead({ icon, title }) {
+      return (
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14 }}>
+          <span style={{ fontSize: 17 }}>{icon}</span>
+          <span style={{ color: C.accent, fontWeight: 800, fontSize: 13, letterSpacing: 1.5, textTransform: "uppercase" }}>{title}</span>
+        </div>
+      );
+    }
+
+    function ProgressBar({ label, amount, max, color }) {
+      const pct = max > 0 ? Math.min((amount / max) * 100, 100) : 0;
+      return (
+        <div style={{ marginBottom: 10 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 5 }}>
+            <span style={{ color: C.sub, fontSize: 12 }}>{label}</span>
+            <span style={{ color, fontSize: 13, fontWeight: 700 }}>K {amount.toFixed(2)}</span>
+          </div>
+          <div style={{ height: 7, background: C.dim, borderRadius: 4, overflow: "hidden" }}>
+            <div style={{ height: "100%", width: `${pct}%`, background: color, borderRadius: 4, transition: "width .5s ease" }} />
+          </div>
+        </div>
+      );
+    }
+
+    /* ── main app ────────────────────────────────────── */
+    function App() {
+      const [tab, setTab]         = useState("today");
+      const [floatDef, setFloatDef] = useState(() => load(FLOAT_KEY, DEFAULT_FLOAT));
+      const [allData, setAllData] = useState(() => load(STORAGE_KEY, {}));
+      const [target, setTarget]   = useState(() => load(TARGET_KEY, 500));
+      const [savings, setSavings] = useState(() => load(SAVINGS_KEY, { rent: [], emergency: [], car: [] }));
+      const [savInputs, setSavInputs] = useState({ rent: "", emergency: "", car: "" });
+      const [targetInput, setTargetInput] = useState(() => String(load(TARGET_KEY, 500)));
+      const [floatInput, setFloatInput]   = useState(() => String(load(FLOAT_KEY, DEFAULT_FLOAT)));
+      const [toast, setToast]     = useState(null);
+
+      const todayKey = todayStr();
+
+      const [day, setDay] = useState(() => {
+        const stored = load(STORAGE_KEY, {});
+        return stored[todayKey] || emptyDay(load(FLOAT_KEY, DEFAULT_FLOAT));
+      });
+
+      useEffect(() => {
+        const next = { ...allData, [todayKey]: day };
+        setAllData(next);
+        persist(STORAGE_KEY, next);
+      }, [day]);
+
+      useEffect(() => { persist(FLOAT_KEY, floatDef); }, [floatDef]);
+      useEffect(() => { persist(TARGET_KEY, target); },  [target]);
+
+      const showToast = (msg) => { setToast(msg); setTimeout(() => setToast(null), 2500); };
+
+      const cashIn = parseFloat(day.cashIn) || 0;
+      const fuel   = parseFloat(day.fuel)   || 0;
+      const float  = parseFloat(day.float)  || 0;
+      const profit = cashIn - fuel - float;
+
+      const tbCashIn = Object.values(day.blocks).reduce((s, b) => s + (parseFloat(b.cashIn) || 0), 0);
+      const tbTrips  = Object.values(day.blocks).reduce((s, b) => s + (parseFloat(b.trips)  || 0), 0);
+
+      const targetMet = cashIn >= target;
+      const targetPct = target > 0 ? Math.min((cashIn / target) * 100, 100) : 0;
+
+      const weekDays = Array.from({ length: 7 }, (_, i) => {
+        const d = new Date(); d.setDate(d.getDate() - (6 - i));
+        return d.toISOString().split("T")[0];
+      });
+      const weekData = weekDays.map(d => {
+        const e   = allData[d] || {};
+        const ci  = parseFloat(e.cashIn) || 0;
+        const fu  = parseFloat(e.fuel)   || 0;
+        const fl  = parseFloat(e.float)  || floatDef;
+        return { date: d, label: fmtDate(d).split(",")[0], cashIn: ci, fuel: fu, profit: ci - fu - fl, trips: parseInt(e.trips) || 0 };
+      });
+      const wkCashIn = weekData.reduce((s, d) => s + d.cashIn, 0);
+      const wkFuel   = weekData.reduce((s, d) => s + d.fuel,   0);
+      const wkProfit = weekData.reduce((s, d) => s + d.profit, 0);
+      const wkAvg    = wkCashIn / 7;
+      const bestDay  = weekData.reduce((b, d) => d.cashIn > b.cashIn ? d : b, weekData[0]);
+      const active   = weekData.filter(d => d.cashIn > 0);
+      const worstDay = active.length ? active.reduce((w, d) => d.cashIn < w.cashIn ? d : w, active[0]) : weekData[0];
+
+      const savTotals = {
+        rent:      (savings.rent      || []).reduce((s, v) => s + v.amount, 0),
+        emergency: (savings.emergency || []).reduce((s, v) => s + v.amount, 0),
+        car:       (savings.car       || []).reduce((s, v) => s + v.amount, 0),
+      };
+      const totalSaved = savTotals.rent + savTotals.emergency + savTotals.car;
+
+      const upDay   = (k, v)       => setDay(p => ({ ...p, [k]: v }));
+      const upBlock = (b, k, v)    => setDay(p => ({ ...p, blocks: { ...p.blocks, [b]: { ...p.blocks[b], [k]: v } } }));
+      const addSav  = (type) => {
+        const amt = parseFloat(savInputs[type]);
+        if (!amt || amt <= 0) { showToast("Enter a valid amount"); return; }
+        const next = { ...savings, [type]: [...(savings[type] || []), { date: todayKey, amount: amt }] };
+        setSavings(next); persist(SAVINGS_KEY, next);
+        setSavInputs(p => ({ ...p, [type]: "" }));
+        showToast(`K ${amt.toFixed(2)} saved!`);
+      };
+
+      /* screens */
+      function ScreenToday() {
+        return (
+          <div>
+            <SecHead icon="📋" title="Today's Entry" />
+            <Card>
+              <div style={{ color: C.sub, fontSize: 11, marginBottom: 14 }}>
+                {new Date().toLocaleDateString("en-ZM", { weekday: "long", year: "numeric", month: "long", day: "numeric" })}
+              </div>
+              <NumInput label="Number of Trips" value={day.trips} onChange={v => upDay("trips", v)} />
+              <NumInput label="Total Cash-In" value={day.cashIn} onChange={v => upDay("cashIn", v)} prefix="K" />
+              <NumInput label="Fuel Cost" value={day.fuel} onChange={v => upDay("fuel", v)} prefix="K" />
+              <NumInput label="Float" value={day.float} onChange={v => upDay("float", v)} prefix="K" />
+              <div style={{ color: C.sub, fontSize: 10.5, marginTop: -6, marginBottom: 4 }}>Auto-filled from default (K{floatDef}) — edit if needed</div>
+            </Card>
+
+            <Card accent={profit >= 0 ? C.green : C.red}>
+              <SecHead icon="💵" title="Today's Profit" />
+              <Row label="Cash In" value={`K ${cashIn.toFixed(2)}`} color={C.accent} />
+              <Row label="− Fuel" value={`K ${fuel.toFixed(2)}`} color={C.red} />
+              <Row label="− Float" value={`K ${float.toFixed(2)}`} color={C.sub} />
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", paddingTop: 14 }}>
+                <span style={{ color: C.text, fontSize: 14, fontWeight: 700, letterSpacing: 1 }}>NET PROFIT</span>
+                <span style={{ color: profit >= 0 ? C.green : C.red, fontSize: 36, fontWeight: 900 }}>K {profit.toFixed(2)}</span>
+              </div>
+            </Card>
+
+            <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+              {[
+                { label: "Trips",    value: parseInt(day.trips) || 0, color: C.blue   },
+                { label: "Cash-In",  value: `K${cashIn.toFixed(0)}`, color: C.accent },
+                { label: "Expenses", value: `K${(fuel + float).toFixed(0)}`, color: C.red },
+              ].map(({ label, value, color }) => (
+                <div key={label} style={{ flex: 1, background: C.card2, border: `1px solid ${C.border}`, borderRadius: 14, padding: "10px 6px", textAlign: "center" }}>
+                  <div style={{ color, fontSize: 18, fontWeight: 800 }}>{value}</div>
+                  <div style={{ color: C.sub, fontSize: 10 }}>{label}</div>
+                </div>
+              ))}
+            </div>
+
+            <Card>
+              <SecHead icon="⚙️" title="Default Float Setting" />
+              <div style={{ display: "flex", gap: 8, alignItems: "flex-end" }}>
+                <div style={{ flex: 1 }}><NumInput value={floatInput} onChange={setFloatInput} prefix="K" /></div>
+                <button onClick={() => { const v = parseFloat(floatInput); if (v > 0) { setFloatDef(v); showToast(`Default float set to K${v}`); } }}
+                  style={{ background: C.accent, border: "none", borderRadius: 12, padding: "13px 18px", color: "#000", fontWeight: 800, fontSize: 13, cursor: "pointer", marginBottom: 12 }}>
+                  SAVE
+                </button>
+              </div>
+            </Card>
+          </div>
+        );
+      }
+
+      function ScreenBlocks() {
+        const BLOCKS = [
+          { key: "morning", icon: "🌅", label: "Morning", time: "5am – 10am", glow: "#fbbf24" },
+          { key: "midday",  icon: "☀️", label: "Midday",  time: "10am – 3pm", glow: "#f97316" },
+          { key: "evening", icon: "🌆", label: "Evening", time: "3pm – 8pm",  glow: "#8b5cf6" },
+          { key: "night",   icon: "🌙", label: "Night",   time: "8pm – 2am",  glow: "#38bdf8" },
+        ];
+        return (
+          <div>
+            <SecHead icon="🕐" title="Time Block Tracking" />
+            {BLOCKS.map(({ key, icon, label, time, glow }) => {
+              const b  = day.blocks[key];
+              const ci = parseFloat(b.cashIn) || 0;
+              return (
+                <Card key={key} accent={ci > 0 ? glow : undefined}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                      <span style={{ fontSize: 26 }}>{icon}</span>
+                      <div>
+                        <div style={{ color: C.text, fontWeight: 700, fontSize: 16 }}>{label}</div>
+                        <div style={{ color: C.sub, fontSize: 11 }}>{time}</div>
+                      </div>
+                    </div>
+                    {ci > 0 && (
+                      <div style={{ textAlign: "right" }}>
+                        <div style={{ color: glow, fontSize: 22, fontWeight: 800 }}>K {ci.toFixed(0)}</div>
+                        <div style={{ color: C.sub, fontSize: 10 }}>{parseInt(b.trips) || 0} trips</div>
+                      </div>
+                    )}
+                  </div>
+                  <div style={{ display: "flex", gap: 8 }}>
+                    <div style={{ flex: 1 }}><NumInput label="Trips" value={b.trips} onChange={v => upBlock(key, "trips", v)} /></div>
+                    <div style={{ flex: 2 }}><NumInput label="Cash-In (K)" value={b.cashIn} onChange={v => upBlock(key, "cashIn", v)} prefix="K" /></div>
+                  </div>
+                  <TxtInput label="Notes" value={b.notes} onChange={v => upBlock(key, "notes", v)} placeholder="Any notes for this shift…" />
+                </Card>
+              );
+            })}
+            <Card accent={C.accent}>
+              <SecHead icon="∑" title="Shift Totals" />
+              <Row label="Total Trips (from blocks)" value={tbTrips} />
+              <Row label="Total Cash-In (from blocks)" value={`K ${tbCashIn.toFixed(2)}`} color={C.accent} big noBorder />
+            </Card>
+          </div>
+        );
+      }
+
+      function ScreenTarget() {
+        return (
+          <div>
+            <SecHead icon="🎯" title="Daily Target Tracker" />
+            <Card>
+              <div style={{ display: "flex", gap: 8, alignItems: "flex-end" }}>
+                <div style={{ flex: 1 }}><NumInput label="Set Daily Target (ZMW)" value={targetInput} onChange={setTargetInput} prefix="K" /></div>
+                <button onClick={() => { const v = parseFloat(targetInput); if (v > 0) { setTarget(v); showToast(`Target set to K${v}`); } }}
+                  style={{ background: C.accent, border: "none", borderRadius: 12, padding: "13px 18px", color: "#000", fontWeight: 800, fontSize: 13, cursor: "pointer", marginBottom: 12 }}>
+                  SET
+                </button>
+              </div>
+              <div style={{ marginBottom: 6, display: "flex", justifyContent: "space-between" }}>
+                <span style={{ color: C.sub, fontSize: 11 }}>Progress</span>
+                <span style={{ color: C.text, fontSize: 12, fontWeight: 700 }}>K {cashIn.toFixed(0)} / K {target.toFixed(0)}</span>
+              </div>
+              <div style={{ height: 22, background: C.dim, borderRadius: 11, overflow: "hidden", position: "relative" }}>
+                <div style={{ height: "100%", width: `${targetPct}%`, background: targetMet ? `linear-gradient(90deg, ${C.green}, #059669)` : `linear-gradient(90deg, ${C.accentLo}, ${C.accent})`, borderRadius: 11, transition: "width .6s ease" }} />
+                <span style={{ position: "absolute", top: "50%", left: "50%", transform: "translate(-50%,-50%)", color: "#fff", fontSize: 11, fontWeight: 800 }}>{targetPct.toFixed(0)}%</span>
+              </div>
+            </Card>
+
+            <Card accent={targetMet ? C.green : C.accent} style={{ textAlign: "center", padding: "24px 16px" }}>
+              <div style={{ fontSize: 52 }}>{targetMet ? "🏆" : cashIn > 0 ? "💪" : "🚗"}</div>
+              <div style={{ color: targetMet ? C.green : C.accent, fontSize: 28, fontWeight: 900, marginTop: 8, letterSpacing: 1 }}>
+                {targetMet ? "TARGET REACHED!" : cashIn > 0 ? "KEEP GOING!" : "START YOUR DAY!"}
+              </div>
+              <div style={{ color: C.sub, fontSize: 14, marginTop: 8 }}>
+                {targetMet ? `🎉 You beat your target by K ${(cashIn - target).toFixed(2)}` :
+                  target > cashIn ? `K ${(target - cashIn).toFixed(2)} more to hit your K${target} target` :
+                  "Set your target above to begin tracking"}
+              </div>
+            </Card>
+
+            <Card>
+              <SecHead icon="📊" title="Earnings Breakdown" />
+              <ProgressBar label="Total Cash-In" amount={cashIn} max={target} color={C.accent} />
+              <ProgressBar label="Fuel + Float (Expenses)" amount={fuel + float} max={target} color={C.red} />
+              <ProgressBar label="Net Profit" amount={Math.max(profit, 0)} max={target} color={C.green} />
+            </Card>
+
+            {cashIn > 0 && !targetMet && cashIn < target * 0.5 && (
+              <Card accent={C.red} style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                <span style={{ fontSize: 28 }}>⚠️</span>
+                <div>
+                  <div style={{ color: C.red, fontWeight: 700, fontSize: 14 }}>Below 50% of Target</div>
+                  <div style={{ color: C.sub, fontSize: 12 }}>Push harder — you've still got time today!</div>
+                </div>
+              </Card>
+            )}
+          </div>
+        );
+      }
+
+      function ScreenSavings() {
+        const savConfig = [
+          { key: "rent",      label: "Rent Savings",   icon: "🏠", color: C.purple },
+          { key: "emergency", label: "Emergency Fund",  icon: "🛡️", color: C.red    },
+          { key: "car",       label: "Car Fund",        icon: "🚗", color: C.blue   },
+        ];
+        return (
+          <div>
+            <SecHead icon="💰" title="Savings Tracker" />
+            <Card accent={C.green}>
+              <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+                {savConfig.map(({ key, icon, label, color }) => (
+                  <div key={key} style={{ flex: 1, background: C.card2, borderRadius: 14, padding: "12px 6px", textAlign: "center", border: `1px solid ${C.border}` }}>
+                    <div style={{ fontSize: 22 }}>{icon}</div>
+                    <div style={{ color: C.sub, fontSize: 9, margin: "4px 0", letterSpacing: 0.5 }}>{label.split(" ")[0].toUpperCase()}</div>
+                    <div style={{ color, fontSize: 19, fontWeight: 800 }}>K {savTotals[key].toFixed(0)}</div>
+                  </div>
+                ))}
+              </div>
+              <div style={{ borderTop: `1px solid ${C.border}`, paddingTop: 12, textAlign: "center" }}>
+                <div style={{ color: C.sub, fontSize: 10, letterSpacing: 1.5, textTransform: "uppercase" }}>Total Saved</div>
+                <div style={{ color: C.green, fontSize: 38, fontWeight: 900 }}>K {totalSaved.toFixed(2)}</div>
+              </div>
+            </Card>
+
+            {savConfig.map(({ key, label, icon, color }) => (
+              <Card key={key}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
+                  <span style={{ fontSize: 20 }}>{icon}</span>
+                  <span style={{ color: C.text, fontWeight: 700, fontSize: 14 }}>{label}</span>
+                  <span style={{ marginLeft: "auto", color, fontWeight: 800, fontSize: 16 }}>K {savTotals[key].toFixed(2)}</span>
+                </div>
+                <div style={{ display: "flex", gap: 8 }}>
+                  <div style={{ flex: 1 }}><NumInput value={savInputs[key]} onChange={v => setSavInputs(p => ({ ...p, [key]: v }))} prefix="K" /></div>
+                  <button onClick={() => addSav(key)}
+                    style={{ background: color, border: "none", borderRadius: 12, padding: "0 18px", color: "#fff", fontWeight: 800, fontSize: 13, cursor: "pointer", height: 48 }}>
+                    + ADD
+                  </button>
+                </div>
+                {(savings[key] || []).length > 0 && (
+                  <div style={{ borderTop: `1px solid ${C.border}`, paddingTop: 8 }}>
+                    <div style={{ color: C.sub, fontSize: 10, marginBottom: 4, letterSpacing: 1 }}>RECENT ENTRIES</div>
+                    {[...(savings[key] || [])].reverse().slice(0, 4).map((e, i) => (
+                      <div key={i} style={{ display: "flex", justifyContent: "space-between", padding: "4px 0" }}>
+                        <span style={{ color: C.sub, fontSize: 11 }}>{fmtDate(e.date)}</span>
+                        <span style={{ color, fontSize: 12, fontWeight: 700 }}>+ K {e.amount.toFixed(2)}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </Card>
+            ))}
+          </div>
+        );
+      }
+
+      function ScreenWeekly() {
+        return (
+          <div>
+            <SecHead icon="📅" title="Weekly Summary" />
+            <Card>
+              <Lbl>Cash-In — Last 7 Days</Lbl>
+              <ResponsiveContainer width="100%" height={170}>
+                <BarChart data={weekData} margin={{ top: 4, right: 4, left: -18, bottom: 0 }}>
+                  <XAxis dataKey="label" tick={{ fill: C.sub, fontSize: 10 }} axisLine={false} tickLine={false} />
+                  <YAxis tick={{ fill: C.sub, fontSize: 9 }} axisLine={false} tickLine={false} />
+                  <Tooltip
+                    contentStyle={{ background: C.card2, border: `1px solid ${C.border}`, borderRadius: 10, color: C.text, fontSize: 12 }}
+                    formatter={(v) => [`K ${v.toFixed(0)}`, "Cash-In"]}
+                    labelStyle={{ color: C.accent, fontWeight: 700 }}
+                  />
+                  <Bar dataKey="cashIn" radius={[7, 7, 0, 0]}>
+                    {weekData.map((d, i) => (
+                      <Cell key={i} fill={d.date === todayKey ? C.accent : d.cashIn >= target ? C.green : d.cashIn > 0 ? C.accentLo : C.dim} />
+                    ))}
+                  </Bar>
+                </BarChart>
+              </ResponsiveContainer>
+              <div style={{ display: "flex", gap: 14, justifyContent: "center", marginTop: 6 }}>
+                {[[C.accent, "Today"], [C.green, "Target Met"], [C.accentLo, "Active"], [C.dim, "No Data"]].map(([c, l]) => (
+                  <div key={l} style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                    <div style={{ width: 8, height: 8, borderRadius: 2, background: c }} />
+                    <span style={{ color: C.sub, fontSize: 10 }}>{l}</span>
+                  </div>
+                ))}
+              </div>
+            </Card>
+
+            <Card accent={C.accent}>
+              <SecHead icon="💼" title="Week Totals" />
+              <Row label="Total Cash-In" value={`K ${wkCashIn.toFixed(2)}`} color={C.accent} big />
+              <Row label="Total Fuel" value={`K ${wkFuel.toFixed(2)}`} color={C.red} />
+              <Row label="Total Profit" value={`K ${wkProfit.toFixed(2)}`} color={wkProfit >= 0 ? C.green : C.red} big />
+              <Row label="Daily Average" value={`K ${wkAvg.toFixed(2)}`} color={C.text} noBorder />
+            </Card>
+
+            <Card>
+              <SecHead icon="🏆" title="Best & Worst Day" />
+              <Row label={`🥇 Best — ${fmtDate(bestDay?.date || todayKey)}`}   value={`K ${(bestDay?.cashIn  || 0).toFixed(2)}`} color={C.green} />
+              <Row label={`📉 Worst — ${fmtDate(worstDay?.date || todayKey)}`} value={`K ${(worstDay?.cashIn || 0).toFixed(2)}`} color={C.red} noBorder />
+            </Card>
+
+            <Card>
+              <SecHead icon="📋" title="Day by Day" />
+              {weekData.map(d => (
+                <div key={d.date} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 0", borderBottom: `1px solid ${C.border}`, opacity: d.cashIn === 0 ? 0.38 : 1 }}>
+                  <div>
+                    <div style={{ color: d.date === todayKey ? C.accent : C.text, fontSize: 14, fontWeight: 700 }}>
+                      {fmtDate(d.date)}{d.date === todayKey ? " · Today" : ""}
+                    </div>
+                    <div style={{ color: C.sub, fontSize: 11 }}>{d.trips} trips</div>
+                  </div>
+                  <div style={{ textAlign: "right" }}>
+                    <div style={{ color: C.accent, fontSize: 17, fontWeight: 800 }}>K {d.cashIn.toFixed(0)}</div>
+                    <div style={{ color: d.profit >= 0 ? C.green : C.red, fontSize: 11 }}>Profit K {d.profit.toFixed(0)}</div>
+                  </div>
+                </div>
+              ))}
+            </Card>
+          </div>
+        );
+      }
+
+      const TABS = [
+        { key: "today",   icon: "🏠", label: "Today"   },
+        { key: "blocks",  icon: "🕐", label: "Shifts"  },
+        { key: "target",  icon: "🎯", label: "Target"  },
+        { key: "savings", icon: "💰", label: "Savings" },
+        { key: "weekly",  icon: "📊", label: "Weekly"  },
+      ];
+
+      const screens = {
+        today:   <ScreenToday />,
+        blocks:  <ScreenBlocks />,
+        target:  <ScreenTarget />,
+        savings: <ScreenSavings />,
+        weekly:  <ScreenWeekly />,
+      };
+
+      return (
+        <div style={{ background: C.bg, minHeight: "100vh", maxWidth: 430, margin: "0 auto", color: C.text, paddingBottom: 78 }}>
+          {/* Header */}
+          <div style={{ background: C.card, borderBottom: `1px solid ${C.border}`, padding: "14px 18px 12px", position: "sticky", top: 0, zIndex: 20 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <span style={{ fontSize: 20 }}>🚖</span>
+                <div>
+                  <div style={{ color: C.accent, fontSize: 17, fontWeight: 900, letterSpacing: 1.5, lineHeight: 1 }}>DRIVER DAILY</div>
+                  <div style={{ color: C.sub, fontSize: 9, letterSpacing: 2 }}>TRACKER · ZMW</div>
+                </div>
+              </div>
+              <div style={{ textAlign: "right" }}>
+                <div style={{ color: profit >= 0 ? C.green : C.red, fontSize: 26, fontWeight: 900, lineHeight: 1 }}>K {profit.toFixed(0)}</div>
+                <div style={{ color: C.sub, fontSize: 9, letterSpacing: 1 }}>TODAY'S PROFIT</div>
+              </div>
+            </div>
+            {target > 0 && (
+              <div style={{ marginTop: 10, height: 4, background: C.dim, borderRadius: 2, overflow: "hidden" }}>
+                <div style={{ height: "100%", width: `${targetPct}%`, background: targetMet ? C.green : C.accent, borderRadius: 2, transition: "width .5s ease" }} />
+              </div>
+            )}
+          </div>
+
+          {/* Content */}
+          <div style={{ padding: "16px 14px 4px" }}>
+            {screens[tab]}
+          </div>
+
+          {/* Toast */}
+          {toast && (
+            <div style={{ position: "fixed", bottom: 90, left: "50%", transform: "translateX(-50%)", background: C.accent, color: "#000", fontWeight: 800, fontSize: 13, padding: "10px 22px", borderRadius: 50, zIndex: 100, boxShadow: "0 4px 24px rgba(245,158,11,0.5)", whiteSpace: "nowrap" }}>
+              {toast}
+            </div>
+          )}
+
+          {/* Bottom nav */}
+          <div style={{ position: "fixed", bottom: 0, left: "50%", transform: "translateX(-50%)", width: "100%", maxWidth: 430, background: C.card, borderTop: `1px solid ${C.border}`, display: "flex", zIndex: 20 }}>
+            {TABS.map(({ key, icon, label }) => (
+              <button key={key} onClick={() => setTab(key)} style={{ flex: 1, background: "transparent", border: "none", padding: "10px 4px 14px", cursor: "pointer", display: "flex", flexDirection: "column", alignItems: "center", gap: 3, borderTop: `2px solid ${tab === key ? C.accent : "transparent"}` }}>
+                <span style={{ fontSize: 20, filter: tab === key ? "none" : "grayscale(0.6) opacity(0.6)" }}>{icon}</span>
+                <span style={{ color: tab === key ? C.accent : C.sub, fontSize: 8.5, fontWeight: 800, letterSpacing: 0.8, textTransform: "uppercase" }}>{label}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+  </script>
+</body>
+</html>
